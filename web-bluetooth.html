@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zumi BLE Web 통신</title>
+    <!-- Tailwind CSS 로드 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Inter 폰트 사용 설정 */
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-lg bg-white shadow-2xl rounded-xl p-6 md:p-8">
+        <h1 class="text-3xl font-extrabold text-indigo-700 mb-2">Zumi BLE 통신</h1>
+        <p class="text-gray-500 mb-6">ESP32 (ZumiAI) 장치와 웹 브라우저를 통해 통신합니다.</p>
+
+        <!-- 연결 상태 및 버튼 영역 -->
+        <div class="space-y-4">
+            <div id="status" class="p-3 rounded-lg text-sm font-semibold transition-colors duration-300 bg-red-100 text-red-700">
+                연결 상태: 연결되지 않음
+            </div>
+
+            <button id="connectButton"
+                    class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md transition duration-200 focus:outline-none focus:ring-4 focus:ring-indigo-500 focus:ring-opacity-50">
+                블루투스 장치 연결
+            </button>
+        </div>
+
+        <!-- 데이터 통신 영역 (연결 후 표시) -->
+        <div id="communicationArea" class="mt-8 pt-6 border-t border-gray-200 hidden">
+            <h2 class="text-xl font-bold text-gray-700 mb-4">데이터 송수신</h2>
+
+            <!-- 1. 데이터 읽기 -->
+            <div class="mb-6 p-4 border border-gray-200 rounded-lg">
+                <h3 class="font-semibold text-lg mb-2">현재 Characteristic 값 읽기 (Read)</h3>
+                <div id="readValue" class="p-2 bg-gray-100 rounded text-gray-800 text-sm font-mono break-all min-h-[3rem]">
+                    -- 데이터 없음 --
+                </div>
+                <button id="readButton"
+                        class="mt-3 w-full py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition duration-200">
+                    값 읽기 (0xFFF1)
+                </button>
+            </div>
+
+            <!-- 2. 데이터 쓰기 -->
+            <div class="mb-6 p-4 border border-gray-200 rounded-lg">
+                <h3 class="font-semibold text-lg mb-2">데이터 쓰기 (Write)</h3>
+                <input type="text" id="writeInput" placeholder="보낼 문자열을 입력하세요 (예: Hello)"
+                       class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                <button id="writeButton"
+                        class="mt-3 w-full py-2 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-semibold rounded-lg transition duration-200">
+                    데이터 전송 (0xFFF1)
+                </button>
+            </div>
+
+            <!-- 3. 알림/Notificaion 수신 -->
+            <div class="mb-6 p-4 border border-gray-200 rounded-lg">
+                <h3 class="font-semibold text-lg mb-2">알림 수신 (Notify)</h3>
+                <div id="notifyValue" class="p-2 bg-gray-100 rounded text-gray-800 text-sm font-mono break-all min-h-[3rem] max-h-40 overflow-y-auto">
+                    알림 수신 대기 중...
+                </div>
+                <button id="toggleNotifyButton"
+                        class="mt-3 w-full py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold rounded-lg transition duration-200">
+                    Notify 활성화
+                </button>
+            </div>
+        </div>
+
+        <!-- 메시지 박스 -->
+        <div id="messageBox" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 z-50">
+            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+                <p id="messageText" class="text-gray-700 mb-4"></p>
+                <button id="closeMessage" class="w-full py-2 bg-indigo-600 text-white rounded-lg">확인</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // UUID 정의 (ESP32 코드와 일치해야 함)
+        // **수정** 16비트 커스텀 UUID를 128비트 전체 형식으로 변경
+        const PRIMARY_SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb'; // 0xFFF0
+        const CHARACTERISTIC_UUID = '0000fff1-0000-1000-8000-00805f9b34fb'; // 0xFFF1
+
+        // DOM 요소 캐시
+        const connectButton = document.getElementById('connectButton');
+        const statusDiv = document.getElementById('status');
+        const communicationArea = document.getElementById('communicationArea');
+        const readButton = document.getElementById('readButton');
+        const writeButton = document.getElementById('writeButton');
+        const writeInput = document.getElementById('writeInput');
+        const readValueDiv = document.getElementById('readValue');
+        const notifyValueDiv = document.getElementById('notifyValue');
+        const toggleNotifyButton = document.getElementById('toggleNotifyButton');
+
+        // 상태 변수
+        let zumiDevice = null;
+        let zumiCharacteristic = null;
+        let isNotifying = false;
+
+        // ------------------------ 유틸리티 함수 ------------------------
+        /** 주어진 문자열을 ArrayBuffer로 변환 */
+        function stringToBytes(str) {
+            return new TextEncoder().encode(str);
+        }
+
+        /** ArrayBuffer를 문자열로 변환 */
+        function bytesToString(buffer) {
+            return new TextDecoder().decode(buffer);
+        }
+
+        /** 메시지 박스 표시 */
+        function showMessage(text) {
+            document.getElementById('messageText').textContent = text;
+            document.getElementById('messageBox').classList.remove('hidden');
+            document.getElementById('messageBox').classList.add('flex');
+        }
+
+        document.getElementById('closeMessage').onclick = () => {
+            document.getElementById('messageBox').classList.add('hidden');
+            document.getElementById('messageBox').classList.remove('flex');
+        };
+
+        /** 상태 UI 업데이트 */
+        function updateStatus(text, isConnected = false) {
+            statusDiv.textContent = '연결 상태: ' + text;
+            if (isConnected) {
+                statusDiv.classList.remove('bg-red-100', 'text-red-700');
+                statusDiv.classList.add('bg-green-100', 'text-green-700');
+                communicationArea.classList.remove('hidden');
+            } else {
+                statusDiv.classList.add('bg-red-100', 'text-red-700');
+                statusDiv.classList.remove('bg-green-100', 'text-green-700');
+                communicationArea.classList.add('hidden');
+            }
+        }
+
+        // ------------------------ 이벤트 핸들러 ------------------------
+
+        /** 장치 연결 이벤트 */
+        connectButton.onclick = async () => {
+            if (!navigator.bluetooth) {
+                showMessage('⚠️ 브라우저가 Web Bluetooth를 지원하지 않습니다. Chrome/Edge를 사용해 주세요.');
+                return;
+            }
+
+            updateStatus('연결 시도 중...');
+
+            try {
+                // 1. 장치 요청 (필터: ZumiAI 장치 & 서비스 UUID)
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ZumiAI' }],
+                    // optionalServices는 128비트 문자열 형식으로 전달해야 합니다.
+                    optionalServices: [PRIMARY_SERVICE_UUID]
+                });
+
+                zumiDevice = device;
+                zumiDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+                updateStatus(`장치 연결 중 (${device.name})...`);
+
+                // 2. GATT 서버 연결
+                const server = await device.gatt.connect();
+
+                // 3. 서비스 가져오기
+                const service = await server.getPrimaryService(PRIMARY_SERVICE_UUID);
+
+                // 4. Characteristic 가져오기
+                zumiCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+                updateStatus('연결 성공!', true);
+                showMessage(`✅ ${device.name} 장치에 성공적으로 연결되었습니다.`);
+
+            } catch (error) {
+                console.error('BLE 연결 오류:', error);
+                updateStatus('연결 실패: ' + error.message);
+                showMessage(`❌ BLE 연결 실패: ${error.message}`);
+            }
+        };
+
+        /** 연결 해제 이벤트 */
+        function onDisconnected() {
+            updateStatus('연결이 해제되었습니다.');
+            showMessage('연결된 장치와의 연결이 끊어졌습니다.');
+            zumiCharacteristic = null;
+            zumiDevice = null;
+            isNotifying = false;
+            toggleNotifyButton.textContent = 'Notify 활성화';
+            notifyValueDiv.innerHTML = '알림 수신 대기 중...';
+        }
+
+        /** Characteristic 값 읽기 이벤트 */
+        readButton.onclick = async () => {
+            if (!zumiCharacteristic) {
+                showMessage('먼저 장치에 연결해 주세요.');
+                return;
+            }
+            try {
+                const value = await zumiCharacteristic.readValue();
+                const text = bytesToString(value.buffer);
+                readValueDiv.textContent = `[${new Date().toLocaleTimeString()}] ${text} (Raw: ${Array.from(new Uint8Array(value.buffer)).map(b => b.toString(16).padStart(2, '0')).join(' ')})`;
+                console.log('Read Success:', text, value.buffer);
+            } catch (error) {
+                console.error('Read 오류:', error);
+                showMessage('Read 작업 중 오류가 발생했습니다.');
+            }
+        };
+
+        /** Characteristic 값 쓰기 이벤트 */
+        writeButton.onclick = async () => {
+            if (!zumiCharacteristic) {
+                showMessage('먼저 장치에 연결해 주세요.');
+                return;
+            }
+            const data = writeInput.value;
+            if (data.trim() === '') {
+                showMessage('보낼 데이터가 비어있습니다.');
+                return;
+            }
+
+            try {
+                const bytes = stringToBytes(data);
+                await zumiCharacteristic.writeValue(bytes);
+                writeInput.value = ''; // 전송 후 입력 필드 초기화
+                showMessage(`✅ 데이터 전송 완료: "${data}"`);
+                console.log('Write Success:', data);
+            } catch (error) {
+                console.error('Write 오류:', error);
+                showMessage('Write 작업 중 오류가 발생했습니다. 장치 로그를 확인하세요.');
+            }
+        };
+
+        /** Notify 값 변경 이벤트 리스너 */
+        function handleCharacteristicValueChanged(event) {
+            const value = event.target.value;
+            const text = bytesToString(value.buffer);
+
+            // 기존 내용을 유지하면서 새 알림을 추가
+            const time = new Date().toLocaleTimeString();
+            notifyValueDiv.innerHTML = `<span class="text-indigo-600">${time}</span>: ${text} <br>` + notifyValueDiv.innerHTML;
+
+            // 너무 길어지면 일부 삭제 (예: 50줄 이상)
+            if (notifyValueDiv.childElementCount > 50) {
+                 notifyValueDiv.removeChild(notifyValueDiv.lastChild);
+            }
+            console.log('Notify Received:', text, value.buffer);
+        }
+
+        /** Notify 활성화/비활성화 토글 */
+        toggleNotifyButton.onclick = async () => {
+            if (!zumiCharacteristic) {
+                showMessage('먼저 장치에 연결해 주세요.');
+                return;
+            }
+
+            try {
+                if (isNotifying) {
+                    await zumiCharacteristic.stopNotifications();
+                    zumiCharacteristic.removeEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
+                    isNotifying = false;
+                    toggleNotifyButton.textContent = 'Notify 활성화';
+                    toggleNotifyButton.classList.remove('bg-red-500', 'hover:bg-red-600');
+                    toggleNotifyButton.classList.add('bg-purple-500', 'hover:bg-purple-600');
+                    showMessage('알림(Notification)이 비활성화되었습니다.');
+                } else {
+                    zumiCharacteristic.addEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
+                    await zumiCharacteristic.startNotifications();
+                    isNotifying = true;
+                    toggleNotifyButton.textContent = 'Notify 비활성화';
+                    toggleNotifyButton.classList.remove('bg-purple-500', 'hover:bg-purple-600');
+                    toggleNotifyButton.classList.add('bg-red-500', 'hover:bg-red-600');
+                    showMessage('알림(Notification)이 활성화되었습니다. 이제부터 서버에서 보내는 데이터를 받을 수 있습니다.');
+                }
+            } catch (error) {
+                console.error('Notify 토글 오류:', error);
+                showMessage('Notify 설정 중 오류가 발생했습니다.');
+            }
+        };
+
+        // 초기 상태 설정
+        updateStatus('연결되지 않음');
+
+    </script>
+</body>
+</html>
