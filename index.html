@@ -298,9 +298,9 @@
                 bytes = stringToBytes(data).buffer;
             }
 
-            if (bytes.byteLength < 4 || bytes.byteLength > 30) {
-                throw new Error(`패킷 크기 오류: Write 패킷은 4~30 바이트여야 합니다. 현재 ${bytes.byteLength} 바이트입니다.`);
-            }
+            // if (bytes.byteLength < 4 || bytes.byteLength > 30) {
+            //     throw new Error(`패킷 크기 오류: Write 패킷은 4~30 바이트여야 합니다. 현재 ${bytes.byteLength} 바이트입니다.`);
+            // }
 
             return { buffer: bytes, display: logDisplay };
         }
@@ -507,13 +507,13 @@
             const value = event.target.value;
             const displayValue = formatReceivedData(value.buffer);
 
-            if (value.byteLength < 24 || value.byteLength > 32) {
-                 logTransaction('Received (Notify/Warning)', `크기 오류 (${value.byteLength} 바이트): ${displayValue}`);
-                 console.warn(`Notify received with unexpected size: ${value.byteLength} bytes.`);
-            } else {
-                 // 통합 로그에 기록
-                 logTransaction('Received (Notify)', displayValue);
-            }
+            // if (value.byteLength < 24 || value.byteLength > 32) {
+            //      logTransaction('Received (Notify/Warning)', `크기 오류 (${value.byteLength} 바이트): ${displayValue}`);
+            //      console.warn(`Notify received with unexpected size: ${value.byteLength} bytes.`);
+            // } else {
+            //    // 통합 로그에 기록
+                  logTransaction('Received (Notify)', displayValue);
+            // }
             console.log('Notify Received:', displayValue, value.buffer);
         }
 
